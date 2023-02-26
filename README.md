@@ -1,1 +1,0 @@
-# geekbot-sync-to-slack

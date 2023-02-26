@@ -1,0 +1,115 @@
+module.exports = async ({ geekbotApiKey, slackBotToken, slackChannelName, syncPeriod, fetch, core, questionIds, standupId, members }) => {
+  const d = new Date()
+  const dateAfter = parseInt(d.setDate(d.getDate() - Number(syncPeriod)) / 1000)
+
+  const reportResults = await Promise.all(
+    members.map(async (member) => {
+      const userId = member
+      const query = new URLSearchParams({
+        question_ids: questionIds,
+        standup_id: standupId,
+        user_id: userId,
+        after: dateAfter,
+      }).toString()
+      try {
+        const res = await fetch(`https://api.geekbot.com/v1/reports?${query}`, {
+          headers: { Authorization: geekbotApiKey },
+        })
+        if (!res.ok) {
+          return {
+            isSuccess: false,
+            userId,
+            message: 'server error',
+          }
+        }
+        let contents
+        try {
+          contents = await res.json()
+        } catch (err) {
+          return {
+            isSuccess: false,
+            userId,
+            message: 'json error',
+          }
+        }
+        return {
+          isSuccess: true,
+          userId,
+          message: 'Succeeded',
+          contents,
+        }
+      } catch (err) {
+        core.error(err)
+        return {
+          isSuccess: false,
+          userId,
+          message: 'network error',
+        }
+      }
+    }),
+  )
+
+  const slackMessages = reportResults.map((report) => {
+    const slackMessage = {
+      mrkdwn_in: ['text'],
+      color: Math.floor(Math.random() * 16777215).toString(16), // random color
+      author_name: report.userId
+    }
+
+    // Fetch Error
+    if (!report.isSuccess) {
+      slackMessage.text = `Failed to get Contents. Due to ${report.message}`
+      return slackMessage
+    }
+
+    const contents = report.contents
+    // No Contents
+    if (contents.length === 0) {
+      slackMessage.text = `No Contents`
+      return slackMessage
+    }
+
+    // No Questions
+    const answeredReports = contents.filter(
+      (content) => content.questions.length > 0,
+    )
+    slackMessage.author_name = contents[0].member.realname;
+
+    if (answeredReports.length === 0) {
+      slackMessage.text = `No Questions`
+      return slackMessage
+    }
+
+    slackMessage.fields = answeredReports.map((report) => {
+      const d = new Date(report.timestamp * 1000)
+      return {
+        title: `【${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}】`,
+        value: `${report.questions[0].answer}`,
+        short: false,
+      }
+    })
+    return slackMessage
+  })
+
+  try {
+    fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: {
+        'Content-type': 'application/json',
+        'Authorization': `Bearer ${slackBotToken}`
+      },
+      body: JSON.stringify({
+        channel: slackChannelName,
+        attachments: [
+          {
+            mrkdwn_in: ['text'],
+            text: `:robot_face: Hello! The completed tasks of the team members over the past ${syncPeriod} days are as follows`
+          },
+          ...slackMessages,
+        ],
+      })
+    });
+  } catch (err) {
+    core.error(err);
+  }
+}
